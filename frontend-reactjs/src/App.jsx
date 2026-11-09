@@ -4442,7 +4442,7 @@ export default function App() {
               <>
                 <button className="btn" onClick={saveTextGrid} disabled={saveState === 'saving'}>Save annotations</button>
                 <button className="btn" onClick={() => setReturnNotice(returnToStreamlit())}>Return to Streamlit</button>
-                <span title="Use Apply lysn annotations in Streamlit after saving.">Revision {integrationManifest.revision}</span>
+                <span title={integrationManifest.auto_apply ? 'Saved trial annotations update Streamlit automatically.' : 'Use Apply lysn annotations in Streamlit after saving.'}>Revision {integrationManifest.revision}{integrationManifest.auto_apply ? ' · Saves sync to Streamlit' : ''}</span>
               </>
             )}
             {integrationError && <span role="alert" title={integrationError}>{integrationError}</span>}
