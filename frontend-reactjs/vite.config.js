@@ -202,9 +202,14 @@ function publicFilesPlugin() {
 }
 
 export default defineConfig({
-  plugins: [react(), publicFilesPlugin()],
+  plugins: [react(), ...(process.env.LYSN_INTEGRATED === '1' ? [] : [publicFilesPlugin()])],
   server: {
     port: 5173,
+    ...(process.env.LYSN_INTEGRATED === '1' ? {
+      proxy: {
+        '/api/lysn': { target: process.env.LYSN_BACKEND_URL || 'http://127.0.0.1:5050', changeOrigin: false, timeout: 3700000 },
+      },
+    } : {}),
     watch: {
       ignored: ['**/vite.config.js'],
       usePolling: false,
