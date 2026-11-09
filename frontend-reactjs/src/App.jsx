@@ -6,7 +6,7 @@ import {
   buildMelSpectrogram,
 } from './dsp.js';
 import { WELCOME_TITLE, WELCOME_TEXT, SHORTCUTS, TILE_EDITING_HINTS, TILE_COLOR_LEGEND } from './shortcuts.js';
-import { recordingPath, integrationRequest } from './integration.js';
+import { recordingPath, integrationRequest, returnToStreamlit } from './integration.js';
 import { serializeTextGrid as serializePraatTextGrid } from './serializeTextGrid.js';
 
 const INTEGRATED = import.meta.env.VITE_LYSN_INTEGRATED === '1';
@@ -1241,6 +1241,7 @@ export default function App() {
   const integrationRevisionRef = useRef(null);
   const [integrationManifest, setIntegrationManifest] = useState(null);
   const [integrationError, setIntegrationError] = useState(null);
+  const [returnNotice, setReturnNotice] = useState(null);
   const mfaQueueRef = useRef([]);
   const mfaProcessingRef = useRef(false);
   const wordsTierNameRef = useRef('words');
@@ -4440,11 +4441,12 @@ export default function App() {
             {INTEGRATED && integrationManifest && (
               <>
                 <button className="btn" onClick={saveTextGrid} disabled={saveState === 'saving'}>Save annotations</button>
-                <a className="btn" href={integrationManifest.return_url}>Return to Streamlit</a>
+                <button className="btn" onClick={() => setReturnNotice(returnToStreamlit())}>Return to Streamlit</button>
                 <span title="Use Apply lysn annotations in Streamlit after saving.">Revision {integrationManifest.revision}</span>
               </>
             )}
             {integrationError && <span role="alert" title={integrationError}>{integrationError}</span>}
+            {returnNotice && <span role="status">{returnNotice}</span>}
             {saveState && (
               <span className={`save-indicator save-indicator--${saveState}`}>
                 {saveState === 'saving' ? '⟳ Saving…' : saveState === 'saved' ? '✓ Saved' : '✕ Save failed'}
