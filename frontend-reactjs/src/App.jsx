@@ -6,6 +6,11 @@ import {
   buildMelSpectrogram,
 } from './dsp.js';
 import { WELCOME_TITLE, WELCOME_TEXT, SHORTCUTS, TILE_EDITING_HINTS, TILE_COLOR_LEGEND } from './shortcuts.js';
+import { recordingPath, integrationRequest } from './integration.js';
+import { serializeTextGrid as serializePraatTextGrid } from './serializeTextGrid.js';
+
+const INTEGRATED = import.meta.env.VITE_LYSN_INTEGRATED === '1';
+const RECORDING_ID = new URLSearchParams(window.location.search).get('recording');
 
 const lysnIconSrc = (theme) =>
   theme === 'light' ? '/icons/lysn_light-mode.png' : '/icons/lysn_dark-mode.png';
@@ -101,7 +106,7 @@ async function pngBase64ToOffscreen(base64) {
 // decode logic; this only centralizes the POST + JSON-unwrap + error-throw so the
 // three can't drift on transport details (e.g. one silently missing the timeout).
 async function fetchDsp(body, { signal } = {}) {
-  const res = await fetch('/api/compute-dsp', {
+  const res = await fetch(INTEGRATED ? recordingPath(RECORDING_ID, 'dsp') : '/api/compute-dsp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -493,62 +498,12 @@ function customTierLabel(name) {
   return (name === 'WRD' || name === 'PHN') ? `${name} (tier)` : name;
 }
 
-function serializeTextGrid(
-  duration, wordItems, phoneItems, customTiers = [], praatCompat = false,
-  wordsTierName = 'words', phonesTierName = 'phones',
-) {
-  const tierData = [
-    { name: wordsTierName, items: wordItems },
-    { name: phonesTierName, items: phoneItems },
-    ...customTiers.map(t => ({ name: t.name, items: t.items })),
-  ];
-
-  const lines = [
-    'File type = "ooTextFile"',
-    'Object class = "TextGrid"',
-    '',
-    'xmin = 0',
-    `xmax = ${duration.toFixed(6)}`,
-    'tiers? <exists>',
-    `size = ${tierData.length}`,
-    'item []:',
-  ];
-
-  tierData.forEach(({ name, items }, ti) => {
-    const sorted = [...items].sort((a, b) => a.t0 - b.t0);
-    const intervals = [];
-    let cursor = 0;
-    for (const it of sorted) {
-      if (it.t0 > cursor + 1e-9) intervals.push({ t0: cursor, t1: it.t0, text: '' });
-      const iv = { t0: it.t0, t1: it.t1, text: it.text };
-      if (it.score != null) iv.score = it.score;
-      if (it.edited) iv.edited = true;
-      if (it.edited && it.originalText) iv.originalText = it.originalText;
-      intervals.push(iv);
-      cursor = it.t1;
-    }
-    if (cursor < duration - 1e-9) intervals.push({ t0: cursor, t1: duration, text: '' });
-
-    lines.push(`    item [${ti + 1}]:`);
-    lines.push('        class = "IntervalTier"');
-    lines.push(`        name = "${name}"`);
-    lines.push('        xmin = 0');
-    lines.push(`        xmax = ${duration.toFixed(6)}`);
-    lines.push(`        intervals: size = ${intervals.length}`);
-    intervals.forEach((iv, i) => {
-      lines.push(`        intervals [${i + 1}]:`);
-      lines.push(`            xmin = ${iv.t0.toFixed(6)}`);
-      lines.push(`            xmax = ${iv.t1.toFixed(6)}`);
-      lines.push(`            text = "${iv.text}"`);
-      if (iv.score != null && !praatCompat) lines.push(`            score = ${iv.score}`);
-      if (iv.edited && !praatCompat) lines.push(`            edited = true`);
-      if (iv.originalText && !praatCompat) lines.push(`            original = "${iv.originalText}"`);
-    });
-  });
-
-  return lines.join('\n');
+function serializeTextGrid(...args) {
+  // Integrated saves must be standard Praat: tgt cannot read lysn's optional
+  // score/edited/original extension fields. Keep identical dirty-state snapshots.
+  if (INTEGRATED) args[4] = true;
+  return serializePraatTextGrid(...args);
 }
-
 
 function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
   const [name, setName] = useState(defaultName);
@@ -685,7 +640,7 @@ function MoreMenu({
           </div>
         )}
       </div>
-      <label className="ctx-menu__item" style={{ display: 'flex', alignItems: 'center' }}>
+      {!INTEGRATED && <label className="ctx-menu__item" style={{ display: 'flex', alignItems: 'center' }}>
         <span style={{ display: 'inline-flex', marginRight: 8 }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
@@ -693,8 +648,8 @@ function MoreMenu({
         </span>
         Load TextGrid
         <input type="file" accept=".TextGrid,.textgrid" onChange={onLoadTextGrid} style={{ display: 'none' }} />
-      </label>
-      <label className="ctx-menu__item" style={{ display: 'flex', alignItems: 'center' }}>
+      </label>}
+      {!INTEGRATED && <label className="ctx-menu__item" style={{ display: 'flex', alignItems: 'center' }}>
         <span style={{ display: 'inline-flex', marginRight: 8 }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
@@ -702,7 +657,7 @@ function MoreMenu({
         </span>
         Load Wav
         <input type="file" accept=".wav,audio/wav" onChange={onLoadWav} style={{ display: 'none' }} />
-      </label>
+      </label>}
       <div className="ctx-menu__sep" />
       <div
         className="ctx-menu__item"
@@ -1282,7 +1237,10 @@ export default function App() {
   try { skipSaveConfirmInit = localStorage.getItem('skipSaveConfirm') === 'true'; } catch (_) {}
   const skipSaveConfirmRef = useRef(skipSaveConfirmInit); // "Don't ask me again" — persisted across sessions
   const saveTimerRef = useRef(null);
-  const MFA_SERVER = 'http://localhost:5050';
+  const MFA_SERVER = INTEGRATED ? `${window.location.origin}/api/lysn/mfa` : 'http://localhost:5050';
+  const integrationRevisionRef = useRef(null);
+  const [integrationManifest, setIntegrationManifest] = useState(null);
+  const [integrationError, setIntegrationError] = useState(null);
   const mfaQueueRef = useRef([]);
   const mfaProcessingRef = useRef(false);
   const wordsTierNameRef = useRef('words');
@@ -2601,18 +2559,31 @@ export default function App() {
     );
     setSaveState('saving');
     try {
-      const res = await fetch('/api/save-textgrid', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename, content }),
-      });
-      const json = await res.json();
-      if (!json.ok) throw new Error(json.error || 'Save failed');
+      if (INTEGRATED) {
+        const revision = integrationRevisionRef.current;
+        if (!revision) throw new Error('Recording has not finished loading.');
+        const saved = await integrationRequest(recordingPath(RECORDING_ID, 'save'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ generation: revision.generation, revision: revision.revision, content }),
+        });
+        integrationRevisionRef.current = saved;
+        setIntegrationManifest(saved);
+        setIntegrationError(null);
+      } else {
+        const res = await fetch('/api/save-textgrid', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename, content }),
+        });
+        const json = await res.json();
+        if (!json.ok) throw new Error(json.error || 'Save failed');
+      }
       savedTextGridRef.current = content;
       setIsDirty(false);
       setSaveState('saved');
     } catch (e) {
       console.error('Save failed:', e);
+      if (INTEGRATED) setIntegrationError(e.message);
       setSaveState('error');
     } finally {
       clearTimeout(saveTimerRef.current);
@@ -2686,6 +2657,7 @@ export default function App() {
   // confirmation before overwriting (see WavOverwriteModal) rather than silently
   // replacing a file the user may not realize shares that name.
   const loadWavFile = useCallback(async (file) => {
+    if (INTEGRATED) return;
     let collision = false;
     try {
       const res = await fetch('/api/public-files');
@@ -2715,6 +2687,32 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
+      if (INTEGRATED) {
+        try {
+          const manifest = await integrationRequest(recordingPath(RECORDING_ID));
+          const base = recordingPath(RECORDING_ID);
+          const query = new URLSearchParams({ revision: manifest.revision, generation: manifest.generation });
+          const [audio, textgrid] = await Promise.all([
+            fetch(`${base}/audio`), fetch(`${base}/textgrid?${query}`),
+          ]);
+          if (!audio.ok || !textgrid.ok) throw new Error('Recording changed while loading. Reload lysn.');
+          const content = await textgrid.text();
+          await loadAudio(new File([await audio.blob()], manifest.source_name, { type: 'audio/wav' }));
+          loadTextGrid(content);
+          tgFileNameRef.current = manifest.source_name.replace(/\.wav$/i, '') + '.lysn';
+          publicWavFileRef.current = RECORDING_ID;
+          integrationRevisionRef.current = manifest;
+          setIntegrationManifest(manifest);
+          setSetupError(null);
+          const { t0, t1 } = viewRef.current;
+          const { bufT0, bufT1 } = computePaddedWindow(t0, t1);
+          fetchEnhancedSpec(bufT0, bufT1);
+          fetchOverviewChunk(getChunkIndex(t0));
+        } catch (error) {
+          setSetupError(error.message);
+        }
+        return;
+      }
       let manifest;
       try {
         const res = await fetch('/api/public-files');
@@ -3939,8 +3937,9 @@ export default function App() {
   }, []);
   const handleSpecMouseLeave = useCallback(() => setSpecCrosshair(null), []);
 
-  const handleAudioFile = (e) => { if (e.target.files[0]) loadWavFile(e.target.files[0]); };
+  const handleAudioFile = (e) => { if (!INTEGRATED && e.target.files[0]) loadWavFile(e.target.files[0]); };
   const handleTGFile    = (e) => {
+    if (INTEGRATED) return;
     const f = e.target.files[0]; if (!f) return;
     tgFileNameRef.current = f.name.replace(/\.TextGrid$/i, '');
     const reader = new FileReader();
@@ -4438,6 +4437,14 @@ export default function App() {
             {isDirty && !saveState && (
               <span className="save-indicator save-indicator--unsaved">● Unsaved</span>
             )}
+            {INTEGRATED && integrationManifest && (
+              <>
+                <button className="btn" onClick={saveTextGrid} disabled={saveState === 'saving'}>Save annotations</button>
+                <a className="btn" href={integrationManifest.return_url}>Return to Streamlit</a>
+                <span title="Use Apply lysn annotations in Streamlit after saving.">Revision {integrationManifest.revision}</span>
+              </>
+            )}
+            {integrationError && <span role="alert" title={integrationError}>{integrationError}</span>}
             {saveState && (
               <span className={`save-indicator save-indicator--${saveState}`}>
                 {saveState === 'saving' ? '⟳ Saving…' : saveState === 'saved' ? '✓ Saved' : '✕ Save failed'}
