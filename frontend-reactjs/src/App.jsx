@@ -1237,6 +1237,7 @@ export default function App() {
   try { skipSaveConfirmInit = localStorage.getItem('skipSaveConfirm') === 'true'; } catch (_) {}
   const skipSaveConfirmRef = useRef(skipSaveConfirmInit); // "Don't ask me again" — persisted across sessions
   const saveTimerRef = useRef(null);
+  const saveInFlightRef = useRef(false);
   const MFA_SERVER = INTEGRATED ? `${window.location.origin}/api/lysn/mfa` : 'http://localhost:5050';
   const integrationRevisionRef = useRef(null);
   const [integrationManifest, setIntegrationManifest] = useState(null);
@@ -2553,11 +2554,16 @@ export default function App() {
 
   // ── Save TextGrid to public/ (dev server only) ───────────────────────
   const saveTextGrid = useCallback(async () => {
+    if (saveInFlightRef.current) return;
     const filename = tgFileNameRef.current + '.TextGrid';
     const content  = serializeTextGrid(
       durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current,
       false, wordsTierNameRef.current, phonesTierNameRef.current,
     );
+    saveInFlightRef.current = true;
+    const blockEditing = event => { event.preventDefault(); event.stopImmediatePropagation(); };
+    const blockedEvents = ['keydown', 'mousedown', 'pointerdown', 'beforeinput'];
+    for (const name of blockedEvents) window.addEventListener(name, blockEditing, true);
     setSaveState('saving');
     try {
       if (INTEGRATED) {
@@ -2567,9 +2573,25 @@ export default function App() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ generation: revision.generation, revision: revision.revision, content }),
         });
+        const current = serializeTextGrid(
+          durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current,
+          false, wordsTierNameRef.current, phonesTierNameRef.current,
+        );
         integrationRevisionRef.current = saved;
         setIntegrationManifest(saved);
         setIntegrationError(null);
+        if (current !== content) {
+          savedTextGridRef.current = saved.textgrid_content;
+          setIsDirty(true);
+          setIntegrationError('Annotations saved, but you made further edits during alignment. Reload the saved alignment before continuing; your current edits remain in the editor.');
+          return;
+        }
+        const previousView = { ...viewRef.current };
+        loadTextGrid(saved.textgrid_content);
+        viewRef.current = previousView;
+        undoStackRef.current = [];
+        redoStackRef.current = [];
+        redraw();
       } else {
         const res = await fetch('/api/save-textgrid', {
           method: 'POST',
@@ -2579,7 +2601,7 @@ export default function App() {
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || 'Save failed');
       }
-      savedTextGridRef.current = content;
+      if (!INTEGRATED) savedTextGridRef.current = content;
       setIsDirty(false);
       setSaveState('saved');
     } catch (e) {
@@ -2587,10 +2609,12 @@ export default function App() {
       if (INTEGRATED) setIntegrationError(e.message);
       setSaveState('error');
     } finally {
+      for (const name of blockedEvents) window.removeEventListener(name, blockEditing, true);
+      saveInFlightRef.current = false;
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => setSaveState(null), 2000);
     }
-  }, []);
+  }, [loadTextGrid, redraw]);
 
   // Ctrl/Cmd+S entry point — gates saveTextGrid behind a one-time overwrite confirmation
   // (skippable via the modal's "Don't ask me again" checkbox, persisted in localStorage).
@@ -2700,6 +2724,12 @@ export default function App() {
           const content = await textgrid.text();
           await loadAudio(new File([await audio.blob()], manifest.source_name, { type: 'audio/wav' }));
           loadTextGrid(content);
+          if (manifest.focus) {
+            selectionRef.current = { t0: manifest.focus.start, t1: manifest.focus.end };
+            viewRef.current = { t0: Math.max(0, manifest.focus.start - 0.25),
+              t1: Math.min(manifest.duration, manifest.focus.end + 0.25) };
+            redraw();
+          }
           tgFileNameRef.current = manifest.source_name.replace(/\.wav$/i, '') + '.lysn';
           publicWavFileRef.current = RECORDING_ID;
           integrationRevisionRef.current = manifest;
@@ -4449,7 +4479,7 @@ export default function App() {
             {returnNotice && <span role="status">{returnNotice}</span>}
             {saveState && (
               <span className={`save-indicator save-indicator--${saveState}`}>
-                {saveState === 'saving' ? '⟳ Saving…' : saveState === 'saved' ? '✓ Saved' : '✕ Save failed'}
+                {saveState === 'saving' ? '⟳ Saving and aligning wording changes…' : saveState === 'saved' ? '✓ Saved' : '✕ Save failed'}
               </span>
             )}
             {showShortcutsPopover && (
